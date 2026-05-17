@@ -8,19 +8,11 @@ import { AnimatePresence, motion } from "framer-motion";
 
 const adminLinks = [
   { href: "/dashboard/admin", icon: "dashboard", label: "Command Center" },
-  { href: "/trade", icon: "language", label: "Trade Operations" },
-  { href: "/dashboard/admin/students", icon: "group", label: "Students" },
-  { href: "/academy", icon: "school", label: "Academy Hub" },
-  { href: "/automotive", icon: "directions_car", label: "Automotive" },
-  { href: "/events", icon: "event", label: "Events" },
+  { href: "/dashboard/admin/students", icon: "group", label: "Students Registry" },
 ];
 
 const studentLinks = [
   { href: "/dashboard/student", icon: "dashboard", label: "My Dashboard" },
-  { href: "/dashboard/student?tab=0", icon: "play_lesson", label: "My Learning" },
-  { href: "/dashboard/student?tab=1", icon: "library_books", label: "Course Library" },
-  { href: "/dashboard/student?tab=2", icon: "folder_open", label: "Resources" },
-  { href: "/academy", icon: "school", label: "Academy Info" },
 ];
 
 interface DashboardSidebarProps {
@@ -72,18 +64,19 @@ export default function DashboardSidebar({
         })}
       </nav>
 
-      {/* New Venture / Enroll CTA */}
-      <div className="px-6 mt-6">
-        <button
-          onClick={() => { onNewVenture?.(); setMobileOpen(false); }}
-          className="w-full bg-primary text-on-primary font-bold px-4 py-3 flex items-center justify-center gap-2 mb-4 hover:brightness-110 transition-all"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: "20px", fontVariationSettings: "'FILL' 1" }}>add</span>
-          <span style={{ fontFamily: "Geist, monospace", fontSize: "12px", letterSpacing: "0.05em" }}>
-            {role === "admin" ? "New Venture" : "Explore Courses"}
-          </span>
-        </button>
-      </div>
+      {role === "admin" && onNewVenture && (
+        <div className="px-6 mt-6">
+          <button
+            onClick={() => { onNewVenture?.(); setMobileOpen(false); }}
+            className="w-full bg-primary text-on-primary font-bold px-4 py-3 flex items-center justify-center gap-2 mb-4 hover:brightness-110 transition-all"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: "20px", fontVariationSettings: "'FILL' 1" }}>add</span>
+            <span style={{ fontFamily: "Geist, monospace", fontSize: "12px", letterSpacing: "0.05em" }}>
+              New Venture
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="border-t border-outline-variant/10 pt-4 mt-2">

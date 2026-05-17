@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import DashboardSidebar from "@/components/layout/DashboardSidebar";
-import { useCourses, Session } from "@/hooks/useCourses";
+import { useCourses } from "@/hooks/useCourses";
 import { useStudents } from "@/hooks/useStudents";
+import { useAssignments } from "@/hooks/useAssignments";
 
 interface SessionForm {
   id: string;
@@ -25,11 +26,13 @@ const emptySessionForm = (): SessionForm => ({
 
 export default function AdminHubPage() {
   const router = useRouter();
-  const { courses, addCourse, updateCourse, deleteCourse, isLoaded } = useCourses();
+  const { courses, addCourse, updateCourse, deleteCourse, isLoaded: coursesLoaded } = useCourses();
   const { students } = useStudents();
+  const { assignments, addAssignment, gradeAssignment, deleteAssignment, isLoaded: assignmentsLoaded } = useAssignments();
+
+  // Course management states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  
   const [formData, setFormData] = useState<{
     title: string;
     description: string;
@@ -39,6 +42,18 @@ export default function AdminHubPage() {
     description: "",
     sessions: [emptySessionForm()]
   });
+
+  // Assignment management states
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [assignForm, setAssignForm] = useState({
+    title: "",
+    description: "",
+    dueDate: "",
+    targetOption: "all" as "all" | "select",
+    selectedStudentIds: [] as string[]
+  });
+  
+  const [gradesInput, setGradesInput] = useState<{ [submissionId: string]: string }>({});
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -96,10 +111,7 @@ export default function AdminHubPage() {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Filter out sessions that don't have titles and URLs
     const cleanedSessions = formData.sessions.filter(s => s.title.trim() !== "" && s.youtubeUrl.trim() !== "");
-    
     const coursePayload = {
       title: formData.title,
       description: formData.description,
@@ -123,13 +135,58 @@ export default function AdminHubPage() {
     }
   };
 
+  // Assignment Handlers
+  const openAssignModal = () => {
+    setAssignForm({
+      title: "",
+      description: "",
+      dueDate: "",
+      targetOption: "all",
+      selectedStudentIds: []
+    });
+    setIsAssignModalOpen(true);
+  };
+
+  const handleCreateAssignment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assignForm.title || !assignForm.dueDate) {
+      showToast("Please fill in assignment title and due date.");
+      return;
+    }
+    const assignedIds = assignForm.targetOption === "all" ? ["all"] : assignForm.selectedStudentIds;
+    addAssignment({
+      title: assignForm.title,
+      description: assignForm.description,
+      dueDate: assignForm.dueDate,
+      assignedStudentIds: assignedIds
+    });
+    setIsAssignModalOpen(false);
+    showToast(`Assignment "${assignForm.title}" published successfully!`);
+  };
+
+  const toggleStudentSelection = (studentId: string) => {
+    setAssignForm(prev => {
+      const selected = prev.selectedStudentIds.includes(studentId)
+        ? prev.selectedStudentIds.filter(id => id !== studentId)
+        : [...prev.selectedStudentIds, studentId];
+      return { ...prev, selectedStudentIds: selected };
+    });
+  };
+
+  const handleGradeSubmit = (assignmentId: string, studentId: string) => {
+    const key = `${assignmentId}-${studentId}`;
+    const grade = gradesInput[key];
+    if (!grade || grade.trim() === "") {
+      showToast("Please enter a grade before submitting.");
+      return;
+    }
+    gradeAssignment(assignmentId, studentId, grade);
+    showToast("Student assignment graded successfully!");
+  };
+
   const displayedCourses = viewAll ? courses : courses.slice(0, 3);
-  
-  // Calculate true, actual stats
   const totalCourses = courses.length;
   const enrolledStudents = students.length;
-  
-  // Count how many videos actually watched across all students
   const totalWatchedVideos = students.reduce((acc, s) => acc + (s.watchedVideos ? s.watchedVideos.length : 0), 0);
 
   return (
@@ -241,7 +298,7 @@ export default function AdminHubPage() {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {isLoaded && displayedCourses.map((mod) => (
+              {coursesLoaded && displayedCourses.map((mod) => (
                 <div key={mod.id} className="glass-card group overflow-hidden flex flex-col">
                   <div className="h-40 overflow-hidden shrink-0">
                     <img className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500 group-hover:scale-105" src={mod.img || "https://lh3.googleusercontent.com/aida-public/AB6AXuCklkeF4ZuMkBb75fsxKi5nNkwJbIhrHIfNrxc6miByGr7FpA4eCJjXy8z_KyvgKdU9Vgsg0I_REtweRpXHgVzsxFBhAluhenfRbhDS8tYaTVc4Mfx9PLYrGgntSE0cWyF2fbIryXFXGkShzU8jQptEPPYrx35C-BpX1nM2yFBdqXP1yHMZ2Bibq3eTXcynJBrjvUcLi7qFDaOX0BEa-EaMaR9vDB1idAOkW_dvivnre8ApnLwmHG4xZrWHFH9JZ2Vsbe7p-KHwJw"} alt={mod.title} />
@@ -286,8 +343,102 @@ export default function AdminHubPage() {
             </div>
           </motion.section>
 
+          {/* DELIVERABLES & ASSIGNMENTS MANAGER */}
+          <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.15 }}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>ASSIGNMENTS & DELIVERABLES</h2>
+              <button
+                onClick={openAssignModal}
+                className="bg-primary text-background font-bold px-4 py-2 hover:brightness-110 transition-all flex items-center gap-1 uppercase tracking-widest"
+                style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span> Publish Work
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6">
+              {assignmentsLoaded && assignments.length === 0 ? (
+                <div className="glass-card p-12 text-center text-on-surface-variant border border-dashed border-outline-variant/20" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>
+                  No assignments published yet. Click "Publish Work" to assign tasks to scholars.
+                </div>
+              ) : (
+                assignmentsLoaded && assignments.map((assign) => (
+                  <div key={assign.id} className="glass-card p-6 flex flex-col justify-between relative overflow-hidden">
+                    <button
+                      onClick={() => { if(confirm(`Delete assignment "${assign.title}"?`)) deleteAssignment(assign.id); }}
+                      className="absolute top-4 right-4 text-on-surface-variant hover:text-red-400 transition-colors"
+                      title="Delete Assignment"
+                    >
+                      <span className="material-symbols-outlined">delete</span>
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="bg-primary/20 text-primary text-[10px] px-2 py-0.5 font-bold uppercase tracking-widest">{assign.dueDate}</span>
+                        <span className="text-on-surface-variant text-[10px] uppercase tracking-wider" style={{ fontFamily: "Geist, monospace" }}>
+                          Assigned to: {assign.assignedStudentIds.includes("all") ? "All Scholars" : `${assign.assignedStudentIds.length} Student(s)`}
+                        </span>
+                      </div>
+                      <h3 className="text-white font-bold" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "18px" }}>{assign.title}</h3>
+                      <p className="text-on-surface-variant text-sm mt-1 mb-6">{assign.description}</p>
+                    </div>
+
+                    <div className="border-t border-outline-variant/15 pt-4 mt-2">
+                      <h4 className="text-white uppercase tracking-widest text-[10px] mb-3" style={{ fontFamily: "Geist, monospace" }}>SCHOLAR SUBMISSIONS & GRADES ({assign.submissions.length})</h4>
+                      {assign.submissions.length === 0 ? (
+                        <div className="text-on-surface-variant text-xs italic py-2">No submissions recorded yet for this task.</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {assign.submissions.map((sub) => {
+                            const student = students.find(s => s.id === sub.studentId) || { name: "Unknown Scholar" };
+                            const gradeKey = `${assign.id}-${sub.studentId}`;
+                            return (
+                              <div key={sub.studentId} className="p-3 bg-surface-container/60 border border-outline-variant/10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-bold text-xs">{student.name}</span>
+                                    {sub.status === "Graded" ? (
+                                      <span className="bg-green-400/20 text-green-400 text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">✓ Graded: {sub.grade}</span>
+                                    ) : (
+                                      <span className="bg-yellow-400/20 text-yellow-400 text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">Pending Grade</span>
+                                    )}
+                                  </div>
+                                  <div className="text-on-surface-variant text-xs mt-1 bg-background/50 p-2 border border-outline-variant/5 font-mono max-h-24 overflow-y-auto">
+                                    {sub.answer || "(No submission text uploaded)"}
+                                  </div>
+                                  <div className="text-[10px] text-on-surface-variant mt-1">Submitted at: {sub.submittedAt}</div>
+                                </div>
+                                {sub.status !== "Graded" && (
+                                  <div className="flex items-center gap-2 shrink-0 w-full md:w-auto">
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. 92/100"
+                                      value={gradesInput[gradeKey] || ""}
+                                      onChange={e => setGradesInput({ ...gradesInput, [gradeKey]: e.target.value })}
+                                      className="bg-background border border-outline-variant/40 focus:border-primary focus:outline-none text-white text-xs px-2 py-1.5 w-24"
+                                    />
+                                    <button
+                                      onClick={() => handleGradeSubmit(assign.id, sub.studentId)}
+                                      className="bg-primary text-background font-bold text-[10px] px-3 py-1.5 uppercase tracking-widest hover:brightness-110 transition-all"
+                                      style={{ fontFamily: "Geist, monospace" }}
+                                    >
+                                      Submit Grade
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </motion.section>
+
           {/* Student Activity Log */}
-          <motion.div className="grid grid-cols-1 gap-6" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
+          <motion.div className="grid grid-cols-1 gap-6" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.25 }}>
             <div className="glass-card p-6">
               <h2 className="mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>STUDENT REGISTRY & STATUS</h2>
               <div className="space-y-5">
@@ -390,6 +541,74 @@ export default function AdminHubPage() {
                 <div className="pt-4 flex gap-4 border-t border-outline-variant/20">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-3 border border-outline-variant uppercase tracking-widest hover:bg-white/5 transition-colors" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Cancel</button>
                   <button type="submit" className="flex-1 py-3 bg-primary text-background font-bold uppercase tracking-widest hover:brightness-110 transition-all" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Save Course</button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Assignment Modal */}
+      <AnimatePresence>
+        {isAssignModalOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm overflow-y-auto">
+            <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="glass-card w-full max-w-xl p-8 border border-primary/20 relative my-8">
+              <button onClick={() => setIsAssignModalOpen(false)} className="absolute top-4 right-4 text-on-surface-variant hover:text-on-surface transition-colors">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+              <h2 className="text-white mb-6 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "14px" }}>
+                Publish New Assignment Task
+              </h2>
+              
+              <form onSubmit={handleCreateAssignment} className="space-y-6">
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Assignment Title *</label>
+                  <input type="text" required value={assignForm.title} onChange={e => setAssignForm({ ...assignForm, title: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0" placeholder="e.g. Letters of Credit Case Study" />
+                </div>
+                
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Task Description *</label>
+                  <textarea rows={3} required value={assignForm.description} onChange={e => setAssignForm({ ...assignForm, description: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0 resize-none text-xs" placeholder="Detail the requirements that scholars should cover..." />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Due Date / Timeline *</label>
+                    <input type="text" required value={assignForm.dueDate} onChange={e => setAssignForm({ ...assignForm, dueDate: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0" placeholder="e.g. Due in 5 days" />
+                  </div>
+                  <div>
+                    <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Target Audience</label>
+                    <select
+                      value={assignForm.targetOption}
+                      onChange={e => setAssignForm({ ...assignForm, targetOption: e.target.value as "all" | "select" })}
+                      className="w-full bg-surface-container border border-outline-variant/40 focus:border-primary focus:outline-none text-white py-2 px-2 text-xs"
+                    >
+                      <option value="all">All Enrolled Scholars</option>
+                      <option value="select">Select Individual Students</option>
+                    </select>
+                  </div>
+                </div>
+
+                {assignForm.targetOption === "select" && (
+                  <div className="border border-outline-variant/20 p-4 space-y-2 max-h-32 overflow-y-auto">
+                    <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "9px" }}>SELECT TARGET STUDENTS:</label>
+                    {students.map(student => (
+                      <label key={student.id} className="flex items-center gap-2 text-white text-xs cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={assignForm.selectedStudentIds.includes(student.id)}
+                          onChange={() => toggleStudentSelection(student.id)}
+                          className="accent-primary"
+                        />
+                        <span>{student.name} ({student.email})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <div className="pt-4 flex gap-4 border-t border-outline-variant/20">
+                  <button type="button" onClick={() => setIsAssignModalOpen(false)} className="flex-1 py-3 border border-outline-variant uppercase tracking-widest hover:bg-white/5 transition-colors" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Cancel</button>
+                  <button type="submit" className="flex-1 py-3 bg-primary text-background font-bold uppercase tracking-widest hover:brightness-110 transition-all" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Publish Work</button>
                 </div>
               </form>
             </motion.div>

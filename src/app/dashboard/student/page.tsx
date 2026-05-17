@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import DashboardSidebar from "@/components/layout/DashboardSidebar";
 import { useCourses, Course, Session } from "@/hooks/useCourses";
 import { useStudents } from "@/hooks/useStudents";
+import { useAssignments } from "@/hooks/useAssignments";
 
 const getEmbedUrl = (url: string) => {
   try {
@@ -16,18 +17,13 @@ const getEmbedUrl = (url: string) => {
 };
 
 const files = ["Trade Finance Guide.pdf", "Global Operations customs_template.xlsx", "Merkanto Supplier Checklist.docx"];
-
-const assignments = [
-  { title: "Trade Finance Report", due: "Due in 3 days", status: "Pending", color: "text-yellow-400" },
-  { title: "Customs Clearance Case Study", due: "Due in 7 days", status: "In Progress", color: "text-primary" },
-  { title: "Supplier Negotiation Transcript", due: "Submitted", status: "Graded — 92/100", color: "text-green-400" },
-];
-
 const TABS = ["My Learning", "Course Library", "Resources"];
 
 export default function StudentDashboardPage() {
-  const { courses, isLoaded } = useCourses();
+  const { courses, isLoaded: coursesLoaded } = useCourses();
   const { students, markVideoWatched } = useStudents();
+  const { assignments, submitAssignment, isLoaded: assignmentsLoaded } = useAssignments();
+
   const [activeTab, setActiveTab] = useState(0);
   const [playingUrl, setPlayingUrl] = useState<string | null>(null);
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<Course | null>(null);
@@ -36,7 +32,12 @@ export default function StudentDashboardPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [reminderSet, setReminderSet] = useState(false);
-  const [submitted, setSubmitted] = useState<string[]>([]);
+
+  // Submit assignment modal state
+  const [submittingAssignmentId, setSubmittingAssignmentId] = useState<string | null>(null);
+  const [submissionText, setSubmissionText] = useState("");
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
 
   // Resolve logged in student
   const userEmail = typeof window !== "undefined" ? localStorage.getItem("merkanto_user") : null;
@@ -61,7 +62,7 @@ export default function StudentDashboardPage() {
     }
   };
 
-  // Calculate dynamic progress
+  // Calculate dynamic progress metrics
   const totalSessionsCount = courses.reduce((acc, c) => acc + (c.sessions ? c.sessions.length : 0), 0);
   const watchedSessionsCount = courses.reduce((acc, c) => {
     if (!c.sessions) return acc;
@@ -73,10 +74,56 @@ export default function StudentDashboardPage() {
     ? Math.round((watchedSessionsCount / totalSessionsCount) * 100) 
     : 0;
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
-  const activeCourse = courses[0] ?? null;
-  
+  // Filter out courses matching query
   const filteredCourses = courses.filter(c => c.title.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  // 1. Determine "Newest Course Available"
+  const newestCourse = courses.length > 0 ? courses[courses.length - 1] : null;
+
+  // 2. Determine "Resume Watching" (last watched video session, or first if nothing watched yet)
+  let lastWatchedSession: Session | null = null;
+  let lastWatchedCourseTitle = "";
+
+  if (courses.length > 0) {
+    for (const c of courses) {
+      if (c.sessions) {
+        const found = c.sessions.find(s => currentStudent.watchedVideos?.includes(s.youtubeUrl));
+        if (found) {
+          lastWatchedSession = found;
+          lastWatchedCourseTitle = c.title;
+          break;
+        }
+      }
+    }
+    // Fallback: If no watched videos yet, recommend the first session of the first course
+    if (!lastWatchedSession && courses[0]?.sessions && courses[0].sessions.length > 0) {
+      lastWatchedSession = courses[0].sessions[0];
+      lastWatchedCourseTitle = courses[0].title;
+    }
+  }
+
+  // 3. Filter assignments assigned to this student
+  const studentAssignments = assignments.filter(a => 
+    a.assignedStudentIds.includes("all") || a.assignedStudentIds.includes(currentStudent.id)
+  );
+
+  const handleSubmitWorkClick = (assignmentId: string) => {
+    setSubmittingAssignmentId(assignmentId);
+    setSubmissionText("");
+  };
+
+  const handlePublishSubmission = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!submissionText || submissionText.trim() === "") {
+      showToast("Please enter submission text.");
+      return;
+    }
+    if (submittingAssignmentId && currentStudent.id) {
+      submitAssignment(submittingAssignmentId, currentStudent.id, submissionText);
+      showToast("Assignment submitted successfully!");
+      setSubmittingAssignmentId(null);
+    }
+  };
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -154,164 +201,193 @@ export default function StudentDashboardPage() {
           {/* TAB 0: MY LEARNING */}
           {activeTab === 0 && (
             <>
-              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-                <h2 className="text-on-surface mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>CURRENT ACTIVE MODULE</h2>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {activeCourse ? (
-                    <div className="lg:col-span-2 glass-card overflow-hidden">
-                      <div className="p-6 md:p-8">
-                        <div className="text-primary mb-1 uppercase tracking-wider font-bold" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Active Course</div>
-                        <h3 className="mb-2" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "24px", fontWeight: 500 }}>{activeCourse.title}</h3>
-                        <p className="text-on-surface-variant text-sm mb-6">{activeCourse.description || "Learn the ins and outs of global trade."}</p>
+              {/* Newest & Resume Watching Row */}
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Recommended / Resume Watching Lesson */}
+                  <div className="glass-card p-6 flex flex-col justify-between border-primary/20 bg-primary/5">
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse" />
+                        <span className="text-primary uppercase tracking-widest text-[10px] font-bold" style={{ fontFamily: "Geist, monospace" }}>
+                          {currentStudent.watchedVideos?.includes(lastWatchedSession?.youtubeUrl || "") ? "LAST COMPLETED LESSON" : "RESUME WATCHING"}
+                        </span>
+                      </div>
+                      {lastWatchedSession ? (
+                        <>
+                          <div className="text-on-surface-variant text-[11px] uppercase tracking-wider mb-1" style={{ fontFamily: "Geist, monospace" }}>
+                            {lastWatchedCourseTitle}
+                          </div>
+                          <h3 className="text-white font-bold mb-2" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "20px" }}>
+                            {lastWatchedSession.title}
+                          </h3>
+                          <p className="text-on-surface-variant text-sm line-clamp-2 mb-4">
+                            {lastWatchedSession.description || "Pick up exactly where you left off in your learning journey."}
+                          </p>
+                        </>
+                      ) : (
+                        <div className="text-on-surface-variant text-sm italic py-4">No active video sessions found inside course modules.</div>
+                      )}
+                    </div>
+                    {lastWatchedSession && (
+                      <button
+                        onClick={() => playVideo(lastWatchedSession!.youtubeUrl)}
+                        className="bg-primary text-background font-bold text-xs uppercase tracking-widest py-2.5 px-6 hover:brightness-110 transition-all flex items-center justify-center gap-1 w-full"
+                        style={{ fontFamily: "Geist, monospace" }}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">play_arrow</span>
+                        Play Lesson Video
+                      </button>
+                    )}
+                  </div>
 
-                        <div className="space-y-4">
-                          <h4 className="text-white uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Video Lesson Sessions:</h4>
-                          {activeCourse.sessions && activeCourse.sessions.length > 0 ? (
-                            <div className="space-y-3">
-                              {activeCourse.sessions.map((session, index) => {
-                                const watched = currentStudent.watchedVideos?.includes(session.youtubeUrl);
-                                return (
-                                  <div key={session.id} className="p-4 bg-surface-container border border-outline-variant/15 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-primary/30 transition-all">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-xs text-primary font-bold" style={{ fontFamily: "Geist, monospace" }}>Lesson 0{index + 1}</span>
-                                        {watched && <span className="bg-primary/20 text-primary text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">✓ Completed</span>}
-                                      </div>
-                                      <div className="text-white font-bold mt-1" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "15px" }}>{session.title}</div>
-                                      {session.description && <p className="text-on-surface-variant text-xs mt-1">{session.description}</p>}
-                                    </div>
-                                    <button 
-                                      onClick={() => playVideo(session.youtubeUrl)} 
-                                      className={`px-4 py-2 uppercase tracking-widest shrink-0 font-bold transition-all text-xs flex items-center gap-1 ${watched ? "bg-surface-container-highest text-on-surface-variant hover:text-white" : "bg-primary text-background hover:brightness-110"}`}
-                                      style={{ fontFamily: "Geist, monospace" }}
-                                    >
-                                      <span className="material-symbols-outlined text-[14px]">play_arrow</span>
-                                      {watched ? "Replay" : "Play"}
-                                    </button>
-                                  </div>
-                                );
-                              })}
+                  {/* Newest Course Available */}
+                  <div className="glass-card p-6 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: "16px" }}>new_releases</span>
+                        <span className="text-on-surface-variant uppercase tracking-widest text-[10px]" style={{ fontFamily: "Geist, monospace" }}>
+                          NEWEST COURSE MODULE
+                        </span>
+                      </div>
+                      {newestCourse ? (
+                        <>
+                          <h3 className="text-white font-bold mb-2" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "20px" }}>
+                            {newestCourse.title}
+                          </h3>
+                          <p className="text-on-surface-variant text-sm line-clamp-2 mb-4">
+                            {newestCourse.description || "Explore our brand new curriculum and trade resources."}
+                          </p>
+                        </>
+                      ) : (
+                        <div className="text-on-surface-variant text-sm italic py-4">No course modules currently published in academy.</div>
+                      )}
+                    </div>
+                    {newestCourse && (
+                      <button
+                        onClick={() => setSelectedCourseDetail(newestCourse)}
+                        className="border border-outline-variant text-white hover:border-primary hover:text-primary font-bold text-xs uppercase tracking-widest py-2.5 px-6 transition-all flex items-center justify-center gap-1 w-full"
+                        style={{ fontFamily: "Geist, monospace" }}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">menu_book</span>
+                        Explore Course Lessons
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </motion.section>
+
+              {/* Course Module Progress List */}
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
+                <h2 className="text-on-surface mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>MODULE PROGRESS</h2>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {coursesLoaded && courses.length > 0 ? (
+                    <div className="lg:col-span-2 glass-card p-6 md:p-8">
+                      <h3 className="mb-4" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "22px", fontWeight: 500 }}>Active Course Library</h3>
+                      <div className="space-y-4">
+                        {courses.map((course, idx) => {
+                          const totalS = course.sessions ? course.sessions.length : 0;
+                          const watchedS = course.sessions 
+                            ? course.sessions.filter(s => currentStudent.watchedVideos?.includes(s.youtubeUrl)).length 
+                            : 0;
+                          const courseProg = totalS > 0 ? Math.round((watchedS / totalS) * 100) : 0;
+                          return (
+                            <div key={course.id} className="p-4 bg-surface-container border border-outline-variant/10 flex justify-between items-center gap-4">
+                              <div className="flex-1">
+                                <div className="text-white font-bold text-sm" style={{ fontFamily: "Hanken Grotesk, sans-serif" }}>{course.title}</div>
+                                <div className="h-1 bg-surface-container-highest rounded-full mt-2 w-full">
+                                  <div className="h-1 bg-primary rounded-full transition-all" style={{ width: `${courseProg}%` }} />
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <div className="text-primary font-bold text-xs" style={{ fontFamily: "Geist, monospace" }}>{courseProg}% Done</div>
+                                <div className="text-[10px] text-on-surface-variant uppercase mt-0.5">{watchedS}/{totalS} Lessons</div>
+                              </div>
                             </div>
-                          ) : (
-                            <div className="p-6 text-center text-on-surface-variant border border-dashed border-outline-variant/20 text-xs">
-                              No video lessons loaded inside this course module.
-                            </div>
-                          )}
-                        </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ) : (
                     <div className="lg:col-span-2 glass-card p-12 flex items-center justify-center text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>
-                      No active course. Ask your admin to add modules.
+                      No active courses. Ask your admin to add modules.
                     </div>
                   )}
                   
-                  {/* Module Progress */}
-                  <div className="glass-card p-6">
-                    <h3 className="text-on-surface mb-6 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>MODULE PROGRESS</h3>
-                    <div className="space-y-5">
-                      {courses.map((c, i) => {
-                        const totalS = c.sessions ? c.sessions.length : 0;
-                        const watchedS = c.sessions 
-                          ? c.sessions.filter(s => currentStudent.watchedVideos?.includes(s.youtubeUrl)).length 
-                          : 0;
-                        const courseProg = totalS > 0 ? Math.round((watchedS / totalS) * 100) : 0;
-                        return (
-                          <div key={c.id}>
-                            <div className="flex justify-between mb-1">
-                              <span className="text-on-surface-variant truncate w-40" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>{c.title}</span>
-                              <span className="text-primary" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>{courseProg}%</span>
-                            </div>
-                            <div className="h-1 bg-surface-container-highest rounded-full">
-                              <div className="h-1 bg-primary rounded-full" style={{ width: `${courseProg}%` }} />
-                            </div>
-                          </div>
-                        );
-                      })}
+                  {/* Overall Certificate progress */}
+                  <div className="glass-card p-6 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-on-surface mb-6 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>CERTIFICATE PROGRESS</h3>
+                      <div className="text-center py-4">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: "64px" }}>workspace_premium</span>
+                        <p className="text-on-surface-variant text-xs mt-2" style={{ fontFamily: "Inter, sans-serif" }}>Complete all video lessons to unlock your certification</p>
+                      </div>
                     </div>
-                    <div className="mt-8 border-t border-white/5 pt-6">
-                      <div className="text-primary font-bold" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "36px" }}>{dynamicCompletion}%</div>
-                      <div className="text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>OVERALL COMPLETION</div>
+                    <div>
+                      <div className="h-1 bg-surface-container-highest mb-2">
+                        <div className="h-1 bg-primary" style={{ width: `${dynamicCompletion}%` }} />
+                      </div>
+                      <div className="flex justify-between text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>
+                        <span>{dynamicCompletion}% complete</span>
+                        <span>{totalSessionsCount - watchedSessionsCount} sessions left</span>
+                      </div>
                     </div>
                   </div>
                 </div>
               </motion.section>
 
-              {/* Bento Row */}
-              <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-6" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
-                {/* Live Session */}
-                <div className="glass-card p-6 border-primary/20 bg-primary/5">
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                    <span className="text-primary uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>LIVE SESSION</span>
-                  </div>
-                  <h4 className="mb-2" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "20px" }}>Trade Finance Live Q&A</h4>
-                  <p className="text-on-surface-variant mb-6" style={{ fontFamily: "Inter, sans-serif", fontSize: "14px" }}>Begins in 2h 34m with Lead Instructor Aslan Merkanto.</p>
-                  <button
-                    onClick={() => { setReminderSet(!reminderSet); showToast(reminderSet ? "Reminder removed." : "Reminder set for Live Session!"); }}
-                    className={`w-full border py-2 uppercase tracking-widest transition-all ${reminderSet ? "bg-primary text-on-primary border-primary" : "border-primary text-primary hover:bg-primary hover:text-on-primary"}`}
-                    style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}
-                  >
-                    {reminderSet ? "✓ Reminder Set" : "Set Reminder"}
-                  </button>
-                </div>
-
-                {/* Downloads */}
-                <div className="glass-card p-6">
-                  <h4 className="mb-4 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>LESSON RESOURCES</h4>
-                  <div className="space-y-3">
-                    {files.map((file) => (
-                      <div key={file} onClick={() => showToast(`Downloading ${file}...`)} className="flex items-center justify-between p-3 border border-outline-variant/20 hover:border-primary/40 transition-colors cursor-pointer group">
-                        <div className="flex items-center gap-3">
-                          <span className="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors" style={{ fontSize: "20px" }}>description</span>
-                          <span className="text-on-surface group-hover:text-primary transition-colors" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>{file}</span>
-                        </div>
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: "18px" }}>download</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Certificate */}
-                <div className="bg-surface-container-low border border-outline-variant/10 p-6">
-                  <h4 className="mb-2" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>CERTIFICATE STATUS</h4>
-                  <div className="my-6 text-center">
-                    <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: "64px" }}>workspace_premium</span>
-                    <p className="text-on-surface-variant mt-2" style={{ fontFamily: "Inter, sans-serif", fontSize: "14px" }}>Complete all video lessons to unlock your certification</p>
-                  </div>
-                  <div className="h-1 bg-surface-container-highest mb-2">
-                    <div className="h-1 bg-primary" style={{ width: `${dynamicCompletion}%` }} />
-                  </div>
-                  <div className="flex justify-between text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>
-                    <span>{dynamicCompletion}% complete</span>
-                    <span>{totalSessionsCount - watchedSessionsCount} sessions left</span>
-                  </div>
-                </div>
-              </motion.div>
-
-              {/* Assignments */}
+              {/* DELIVERABLES & WORKS TO BE COMPLETED */}
               <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.2 }}>
                 <h2 className="text-on-surface mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>CRITICAL DELIVERABLES</h2>
                 <div className="glass-card divide-y divide-outline-variant/10">
-                  {assignments.map((a) => (
-                    <div key={a.title} className="flex items-center justify-between px-6 py-5 hover:bg-white/5 transition-colors">
-                      <div>
-                        <div className="text-on-surface mb-1" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "18px" }}>{a.title}</div>
-                        <div className="text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>{a.due}</div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className={a.color} style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>{a.status}</span>
-                        <button
-                          onClick={() => { if (!submitted.includes(a.title)) { setSubmitted([...submitted, a.title]); showToast(`"${a.title}" submitted successfully!`); } }}
-                          disabled={submitted.includes(a.title) || a.due === "Submitted"}
-                          className={`border px-4 py-2 uppercase tracking-widest transition-all ${submitted.includes(a.title) || a.due === "Submitted" ? "border-primary/30 text-primary/50 cursor-not-allowed" : "border-outline-variant hover:border-primary hover:text-primary"}`}
-                          style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}
-                        >
-                          {submitted.includes(a.title) || a.due === "Submitted" ? "Submitted" : "Submit"}
-                        </button>
-                      </div>
+                  {assignmentsLoaded && studentAssignments.length === 0 ? (
+                    <div className="p-8 text-center text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>
+                      No assignments published or assigned to your profile yet!
                     </div>
-                  ))}
+                  ) : (
+                    assignmentsLoaded && studentAssignments.map((assign) => {
+                      const studentSubmission = assign.submissions?.find(sub => sub.studentId === currentStudent.id);
+                      
+                      return (
+                        <div key={assign.id} className="flex flex-col md:flex-row items-start md:items-center justify-between px-6 py-5 hover:bg-white/5 transition-colors gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-primary font-bold text-xs uppercase tracking-wider" style={{ fontFamily: "Geist, monospace" }}>{assign.dueDate}</span>
+                              {studentSubmission?.status === "Graded" ? (
+                                <span className="bg-green-400/20 text-green-400 text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">✓ Graded: {studentSubmission.grade}</span>
+                              ) : studentSubmission?.status === "Submitted" ? (
+                                <span className="bg-yellow-400/20 text-yellow-400 text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">✓ Submitted · Pending Grade</span>
+                              ) : (
+                                <span className="bg-red-400/20 text-red-400 text-[9px] px-2 py-0.5 font-bold uppercase tracking-wider">Pending Submission</span>
+                              )}
+                            </div>
+                            <h3 className="text-white font-bold" style={{ fontFamily: "Hanken Grotesk, sans-serif", fontSize: "16px" }}>{assign.title}</h3>
+                            <p className="text-on-surface-variant text-xs mt-1">{assign.description}</p>
+                          </div>
+                          
+                          <div className="shrink-0">
+                            {studentSubmission ? (
+                              <button
+                                disabled
+                                className="border border-outline-variant/30 text-on-surface-variant/50 px-4 py-2 uppercase tracking-widest text-xs cursor-not-allowed"
+                                style={{ fontFamily: "Geist, monospace" }}
+                              >
+                                Completed
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleSubmitWorkClick(assign.id)}
+                                className="bg-primary text-background font-bold px-5 py-2 uppercase tracking-widest text-xs hover:brightness-110 transition-all"
+                                style={{ fontFamily: "Geist, monospace" }}
+                              >
+                                Submit Work
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </motion.section>
             </>
@@ -321,14 +397,14 @@ export default function StudentDashboardPage() {
           {activeTab === 1 && (
             <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
               <h2 className="text-on-surface mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>COURSE LIBRARY</h2>
-              {isLoaded && filteredCourses.length === 0 && (
+              {coursesLoaded && filteredCourses.length === 0 && (
                 <div className="glass-card p-12 text-center text-on-surface-variant" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>
                   No courses available match your search query.
                 </div>
               )}
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {isLoaded && filteredCourses.map((course) => {
+                {coursesLoaded && filteredCourses.map((course) => {
                   const totalS = course.sessions ? course.sessions.length : 0;
                   const watchedS = course.sessions 
                     ? course.sessions.filter(s => currentStudent.watchedVideos?.includes(s.youtubeUrl)).length 
@@ -447,10 +523,49 @@ export default function StudentDashboardPage() {
         )}
       </AnimatePresence>
 
+      {/* Submit Assignment Modal */}
+      <AnimatePresence>
+        {submittingAssignmentId && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-background/90 backdrop-blur-sm overflow-y-auto">
+            <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="glass-card w-full max-w-lg p-8 border border-primary/20 relative my-8">
+              <button onClick={() => setSubmittingAssignmentId(null)} className="absolute top-4 right-4 text-on-surface-variant hover:text-white transition-colors">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+              
+              <h2 className="text-white mb-2 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "14px" }}>
+                Submit Assignment Deliverable
+              </h2>
+              <p className="text-on-surface-variant text-xs mb-6">
+                {assignments.find(a => a.id === submittingAssignmentId)?.title}
+              </p>
+              
+              <form onSubmit={handlePublishSubmission} className="space-y-4">
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>YOUR SUBMISSION / TEXT ANSWER *</label>
+                  <textarea
+                    rows={6}
+                    required
+                    value={submissionText}
+                    onChange={e => setSubmissionText(e.target.value)}
+                    className="w-full bg-transparent border border-outline-variant/30 focus:border-primary focus:outline-none transition-colors text-white py-2 px-3 text-xs resize-none"
+                    placeholder="Type or paste your completed homework/deliverable summary here..."
+                  />
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button type="button" onClick={() => setSubmittingAssignmentId(null)} className="flex-1 py-3 border border-outline-variant uppercase tracking-widest hover:bg-white/5 transition-colors text-xs" style={{ fontFamily: "Geist, monospace" }}>Cancel</button>
+                  <button type="submit" className="flex-1 py-3 bg-primary text-background font-bold uppercase tracking-widest hover:brightness-110 transition-all text-xs" style={{ fontFamily: "Geist, monospace" }}>Submit Work</button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Video Modal */}
       <AnimatePresence>
         {playingUrl && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-background/95 backdrop-blur-md">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-background/95 backdrop-blur-md">
             <div className="relative w-full max-w-5xl aspect-video glass-card border border-primary/20 overflow-hidden">
               <button onClick={() => setPlayingUrl(null)} className="absolute top-4 right-4 z-10 w-10 h-10 bg-background/50 backdrop-blur-md border border-white/10 rounded-full flex items-center justify-center text-white hover:text-primary transition-colors">
                 <span className="material-symbols-outlined">close</span>

@@ -1,69 +1,105 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { supabase } from "@/utils/supabaseClient";
 
 export interface Admin {
   id: string;
   name: string;
   email: string;
-  password?: string;
   role: "admin";
   joinedDate: string;
+  password?: string;
 }
-
-const DEFAULT_ADMINS: Admin[] = [
-  {
-    id: "a1",
-    name: "Merkanto Executive",
-    email: "admin@merkanto.com",
-    password: "admin123",
-    role: "admin",
-    joinedDate: "2024-01-01"
-  }
-];
 
 export function useAdmins() {
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("merkanto_admins");
-    if (saved) {
-      try {
-        setAdmins(JSON.parse(saved));
-      } catch (e) {
-        setAdmins(DEFAULT_ADMINS);
+  const fetchAdmins = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("role", "admin");
+
+      if (error) {
+        console.error("Error loading admins:", error);
+      } else {
+        const mapped = (data || []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          email: p.email,
+          role: "admin" as const,
+          joinedDate: p.joined_date
+        }));
+        setAdmins(mapped);
       }
-    } else {
-      setAdmins(DEFAULT_ADMINS);
-      localStorage.setItem("merkanto_admins", JSON.stringify(DEFAULT_ADMINS));
+    } catch (e) {
+      console.error("Failed to query admins:", e);
+    } finally {
+      setIsLoaded(true);
     }
-    setIsLoaded(true);
+  };
+
+  useEffect(() => {
+    fetchAdmins();
   }, []);
 
-  const save = (newAdmins: Admin[]) => {
-    setAdmins(newAdmins);
-    localStorage.setItem("merkanto_admins", JSON.stringify(newAdmins));
+  const addAdmin = async (data: Omit<Admin, "id" | "joinedDate" | "role"> & { password?: string }) => {
+    try {
+      const { error } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password || "admin123", // Default initial password
+        options: {
+          data: {
+            name: data.name,
+            role: "admin",
+            track: "Global Command"
+          }
+        }
+      });
+
+      if (error) {
+        console.error("Error creating admin auth:", error);
+      }
+      await fetchAdmins();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const addAdmin = (data: Omit<Admin, "id" | "joinedDate" | "role">) => {
-    const newAdmin: Admin = {
-      ...data,
-      id: Math.random().toString(36).substring(2, 9),
-      role: "admin",
-      joinedDate: new Date().toISOString().split("T")[0]
-    };
-    save([...admins, newAdmin]);
-  };
-
-  const deleteAdmin = (id: string) => {
-    // Prevent deleting the primary admin
+  const deleteAdmin = async (id: string) => {
+    // Prevent deleting the primary seed admin
     if (id === "a1") return;
-    save(admins.filter(a => a.id !== id));
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .delete()
+        .eq("id", id);
+
+      if (error) console.error("Error deleting admin profile:", error);
+      await fetchAdmins();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const updateAdmin = (id: string, updates: Partial<Admin>) => {
-    save(admins.map(a => a.id === id ? { ...a, ...updates } : a));
+  const updateAdmin = async (id: string, updates: Partial<Admin>) => {
+    try {
+      const dbUpdates: any = {};
+      if (updates.name) dbUpdates.name = updates.name;
+
+      const { error } = await supabase
+        .from("profiles")
+        .update(dbUpdates)
+        .eq("id", id);
+
+      if (error) console.error("Error updating admin profile:", error);
+      await fetchAdmins();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return {

@@ -36,7 +36,7 @@ export default function StudentManagementPage() {
   const openAdd = () => { setEditingId(null); setForm({ ...emptyForm }); setModalOpen(true); };
   const openEdit = (s: Student) => {
     setEditingId(s.id);
-    setForm({ name: s.name, email: s.email, password: s.password || "", track: s.track, progress: s.progress, lastModule: s.lastModule, status: s.status });
+    setForm({ name: s.name, email: s.email, password: s.password || "", track: s.track, progress: s.progress, lastModule: s.lastModule || "", status: s.status });
     setModalOpen(true);
   };
 

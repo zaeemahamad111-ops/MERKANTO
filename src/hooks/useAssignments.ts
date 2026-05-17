@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { supabase } from "@/utils/supabaseClient";
 
 export interface Submission {
   studentId: string;
@@ -19,99 +20,124 @@ export interface Assignment {
   submissions: Submission[];
 }
 
-const DEFAULT_ASSIGNMENTS: Assignment[] = [
-  {
-    id: "a1",
-    title: "Trade Finance Assessment",
-    description: "Write a summary analyzing key factors in international letter of credits.",
-    dueDate: "Due in 3 days",
-    assignedStudentIds: ["all"],
-    submissions: [
-      { studentId: "s1", submittedAt: "2024-05-15", status: "Submitted", answer: "I analyzed international letters of credits..." }
-    ]
-  },
-  {
-    id: "a2",
-    title: "Customs Clearance Case Study",
-    description: "Prepare a breakdown of customs delays for the selected supply route.",
-    dueDate: "Due in 7 days",
-    assignedStudentIds: ["all"],
-    submissions: []
-  }
-];
-
 export function useAssignments() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("merkanto_assignments");
-    if (saved) {
-      try {
-        setAssignments(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse assignments", e);
-        setAssignments(DEFAULT_ASSIGNMENTS);
+  const fetchAssignments = async () => {
+    try {
+      // Fetch both assignments and submissions from Supabase
+      const { data: aData, error: aError } = await supabase
+        .from("assignments")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      const { data: sData, error: sError } = await supabase
+        .from("submissions")
+        .select("*");
+
+      if (aError) console.error("Error loading assignments:", aError);
+      if (sError) console.error("Error loading submissions:", sError);
+
+      if (aData) {
+        const mapped = aData.map((a: any) => {
+          const subs = (sData || [])
+            .filter((s: any) => s.assignment_id === a.id)
+            .map((s: any) => ({
+              studentId: s.student_id,
+              submittedAt: s.submitted_at,
+              answer: s.answer,
+              status: s.status as any,
+              grade: s.grade || undefined
+            }));
+
+          return {
+            id: a.id,
+            title: a.title,
+            description: a.description,
+            dueDate: a.due_date,
+            assignedStudentIds: a.assigned_student_ids || ["all"],
+            submissions: subs
+          };
+        });
+
+        setAssignments(mapped);
       }
-    } else {
-      setAssignments(DEFAULT_ASSIGNMENTS);
-      localStorage.setItem("merkanto_assignments", JSON.stringify(DEFAULT_ASSIGNMENTS));
+    } catch (e) {
+      console.error("Failed to query assignments:", e);
+    } finally {
+      setIsLoaded(true);
     }
-    setIsLoaded(true);
+  };
+
+  useEffect(() => {
+    fetchAssignments();
   }, []);
 
-  const save = (newAssignments: Assignment[]) => {
-    setAssignments(newAssignments);
-    localStorage.setItem("merkanto_assignments", JSON.stringify(newAssignments));
+  const addAssignment = async (data: Omit<Assignment, "id" | "submissions">) => {
+    try {
+      const { error } = await supabase
+        .from("assignments")
+        .insert([{
+          title: data.title,
+          description: data.description,
+          due_date: data.dueDate,
+          assigned_student_ids: data.assignedStudentIds
+        }]);
+
+      if (error) console.error("Error adding assignment:", error);
+      await fetchAssignments();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const addAssignment = (data: Omit<Assignment, "id" | "submissions">) => {
-    const newAssignment: Assignment = {
-      ...data,
-      id: Math.random().toString(36).substring(2, 9),
-      submissions: []
-    };
-    save([...assignments, newAssignment]);
-  };
-
-  const submitAssignment = (assignmentId: string, studentId: string, answer: string) => {
-    const updated = assignments.map(a => {
-      if (a.id === assignmentId) {
-        const otherSubmissions = a.submissions.filter(s => s.studentId !== studentId);
-        const newSubmission: Submission = {
-          studentId,
-          submittedAt: new Date().toISOString().split("T")[0],
-          answer,
+  const submitAssignment = async (assignmentId: string, studentId: string, answer: string) => {
+    try {
+      // Upsert student answer in the submissions table
+      const { error } = await supabase
+        .from("submissions")
+        .insert([{
+          assignment_id: assignmentId,
+          student_id: studentId,
+          answer: answer,
           status: "Submitted"
-        };
-        return {
-          ...a,
-          submissions: [...otherSubmissions, newSubmission]
-        };
-      }
-      return a;
-    });
-    save(updated);
+        }]);
+
+      if (error) console.error("Error submitting answer:", error);
+      await fetchAssignments();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const gradeAssignment = (assignmentId: string, studentId: string, grade: string) => {
-    const updated = assignments.map(a => {
-      if (a.id === assignmentId) {
-        const submissions = a.submissions.map(s => {
-          if (s.studentId === studentId) {
-            return { ...s, grade, status: "Graded" as const };
-          }
-          return s;
-        });
-        return { ...a, submissions };
-      }
-      return a;
-    });
-    save(updated);
+  const gradeAssignment = async (assignmentId: string, studentId: string, grade: string) => {
+    try {
+      const { error } = await supabase
+        .from("submissions")
+        .update({ grade: grade, status: "Graded" })
+        .eq("assignment_id", assignmentId)
+        .eq("student_id", studentId);
+
+      if (error) console.error("Error grading submission:", error);
+      await fetchAssignments();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const deleteAssignment = (id: string) => {
-    save(assignments.filter(a => a.id !== id));
+  const deleteAssignment = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from("assignments")
+        .delete()
+        .eq("id", id);
+
+      if (error) console.error("Error deleting assignment:", error);
+      await fetchAssignments();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return {

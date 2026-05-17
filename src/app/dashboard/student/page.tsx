@@ -50,7 +50,7 @@ export default function StudentDashboardPage() {
     lastModule: "Module 06",
     status: "Active" as const,
     joinedDate: "2024-01-10",
-    watchedVideos: []
+    watchedVideos: [] as string[]
   };
 
   const playVideo = (youtubeUrl: string) => {

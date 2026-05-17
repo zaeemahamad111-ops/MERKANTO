@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import DashboardSidebar from "@/components/layout/DashboardSidebar";
 import { useCourses } from "@/hooks/useCourses";
 import { useStudents } from "@/hooks/useStudents";
 import { useAssignments } from "@/hooks/useAssignments";
+import { useAdmins } from "@/hooks/useAdmins";
 
 interface SessionForm {
   id: string;
@@ -29,6 +30,7 @@ export default function AdminHubPage() {
   const { courses, addCourse, updateCourse, deleteCourse, isLoaded: coursesLoaded } = useCourses();
   const { students } = useStudents();
   const { assignments, addAssignment, gradeAssignment, deleteAssignment, isLoaded: assignmentsLoaded } = useAssignments();
+  const { admins, addAdmin, deleteAdmin, isLoaded: adminsLoaded } = useAdmins();
 
   // Course management states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -36,11 +38,24 @@ export default function AdminHubPage() {
   const [formData, setFormData] = useState<{
     title: string;
     description: string;
+    img: string;
     sessions: SessionForm[];
   }>({
     title: "",
     description: "",
+    img: "",
     sessions: [emptySessionForm()]
+  });
+
+  // Uploader status state
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
+
+  // Admin creation modal states
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminForm, setAdminForm] = useState({
+    name: "",
+    email: "",
+    password: ""
   });
 
   // Assignment management states
@@ -64,11 +79,91 @@ export default function AdminHubPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Convert File to WebP client-side via Canvas and Upload
+  const convertAndUploadImage = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new window.Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          
+          // Downscale slightly if too large to conserve space
+          const MAX_WIDTH = 1000;
+          let width = img.width;
+          let height = img.height;
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          canvas.toBlob(async (blob) => {
+            if (!blob) {
+              reject(new Error("Canvas WebP conversion failed."));
+              return;
+            }
+            try {
+              const uploadFormData = new FormData();
+              uploadFormData.append("file", blob, "image.webp");
+              
+              const res = await fetch("/api/upload", {
+                method: "POST",
+                body: uploadFormData
+              });
+              if (!res.ok) {
+                const errData = await res.json();
+                reject(new Error(errData.error || "Upload failed"));
+                return;
+              }
+              const data = await res.json();
+              resolve(data.url);
+            } catch (err) {
+              reject(err);
+            }
+          }, "image/webp", 0.85);
+        };
+        img.onerror = () => reject(new Error("Failed to load image file."));
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error("Failed to read local file."));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, fieldKey: string, sessionIndex?: number) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingField(fieldKey);
+    showToast("Converting and uploading file as WebP...");
+
+    try {
+      const uploadedUrl = await convertAndUploadImage(file);
+      if (sessionIndex !== undefined) {
+        handleSessionChange(sessionIndex, "img", uploadedUrl);
+      } else {
+        setFormData(prev => ({ ...prev, img: uploadedUrl }));
+      }
+      showToast("WebP Cover uploaded successfully!");
+    } catch (err: any) {
+      console.error(err);
+      showToast(`Error: ${err.message || "Failed to upload cover."}`);
+    } finally {
+      setUploadingField(null);
+    }
+  };
+
   const openAddModal = () => {
     setEditingId(null);
     setFormData({
       title: "",
       description: "",
+      img: "",
       sessions: [emptySessionForm()]
     });
     setIsModalOpen(true);
@@ -79,6 +174,7 @@ export default function AdminHubPage() {
     setFormData({
       title: course.title,
       description: course.description || "",
+      img: course.img || "",
       sessions: course.sessions && course.sessions.length > 0 
         ? course.sessions.map((s: any) => ({ ...s })) 
         : [emptySessionForm()]
@@ -115,6 +211,7 @@ export default function AdminHubPage() {
     const coursePayload = {
       title: formData.title,
       description: formData.description,
+      img: formData.img || "https://lh3.googleusercontent.com/aida-public/AB6AXuCklkeF4ZuMkBb75fsxKi5nNkwJbIhrHIfNrxc6miByGr7FpA4eCJjXy8z_KyvgKdU9Vgsg0I_REtweRpXHgVzsxFBhAluhenfRbhDS8tYaTVc4Mfx9PLYrGgntSE0cWyF2fbIryXFXGkShzU8jQptEPPYrx35C-BpX1nM2yFBdqXP1yHMZ2Bibq3eTXcynJBrjvUcLi7qFDaOX0BEa-EaMaR9vDB1idAOkW_dvivnre8ApnLwmHG4xZrWHFH9JZ2Vsbe7p-KHwJw",
       sessions: cleanedSessions
     };
 
@@ -133,6 +230,22 @@ export default function AdminHubPage() {
       deleteCourse(id);
       showToast("Module deleted.");
     }
+  };
+
+  // Admin Account creation handlers
+  const handleCreateAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminForm.name || !adminForm.email || !adminForm.password) {
+      showToast("Please fill in all details.");
+      return;
+    }
+    addAdmin({
+      name: adminForm.name,
+      email: adminForm.email,
+      password: adminForm.password
+    });
+    setIsAdminModalOpen(false);
+    showToast(`Administrator account for ${adminForm.name} created successfully.`);
   };
 
   // Assignment Handlers
@@ -206,7 +319,6 @@ export default function AdminHubPage() {
               </div>
             </div>
             <div className="flex items-center gap-4">
-              {/* Notifications */}
               <div className="relative">
                 <button
                   onClick={() => setNotifOpen(!notifOpen)}
@@ -437,9 +549,10 @@ export default function AdminHubPage() {
             </div>
           </motion.section>
 
-          {/* Student Activity Log */}
-          <motion.div className="grid grid-cols-1 gap-6" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.25 }}>
-            <div className="glass-card p-6">
+          {/* Registries side-by-side Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Student Activity Log */}
+            <motion.div className="glass-card p-6" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
               <h2 className="mb-6 uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>STUDENT REGISTRY & STATUS</h2>
               <div className="space-y-5">
                 {students.slice(0, 4).map((student) => (
@@ -463,8 +576,51 @@ export default function AdminHubPage() {
               >
                 Go to Student Registry <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>arrow_forward</span>
               </button>
-            </div>
-          </motion.div>
+            </motion.div>
+
+            {/* Administrators Registry */}
+            <motion.div className="glass-card p-6 flex flex-col justify-between" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.22 }}>
+              <div>
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="uppercase tracking-[0.2em]" style={{ fontFamily: "Geist, monospace", fontSize: "12px" }}>ADMINISTRATORS REGISTRY</h2>
+                  <button
+                    onClick={() => setIsAdminModalOpen(true)}
+                    className="text-primary hover:underline uppercase tracking-widest text-[10px] flex items-center gap-1 font-bold"
+                    style={{ fontFamily: "Geist, monospace" }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>add</span> Add Admin
+                  </button>
+                </div>
+                
+                <div className="space-y-4 max-h-[220px] overflow-y-auto custom-scrollbar pr-2">
+                  {adminsLoaded && admins.map((admin) => (
+                    <div key={admin.id} className="p-3 bg-surface-container border border-outline-variant/10 flex justify-between items-center gap-4">
+                      <div>
+                        <div className="text-white font-bold text-xs">{admin.name}</div>
+                        <div className="text-[10px] text-on-surface-variant font-mono mt-0.5">{admin.email}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="bg-primary/20 text-primary text-[8px] px-1.5 py-0.5 uppercase tracking-wider font-mono">Role: {admin.role}</span>
+                        {admin.id !== "a1" ? (
+                          <button
+                            onClick={() => { if (confirm(`Remove administrator privileges for ${admin.name}?`)) deleteAdmin(admin.id); }}
+                            className="block text-red-400 hover:text-red-300 text-[10px] uppercase font-bold mt-1 text-right"
+                          >
+                            Revoke
+                          </button>
+                        ) : (
+                          <div className="text-[9px] text-on-surface-variant font-mono mt-1">Primary</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="text-on-surface-variant text-[10px] mt-4 pt-4 border-t border-outline-variant/10 uppercase tracking-wide" style={{ fontFamily: "Geist, monospace" }}>
+                Active System administrators: {admins.length}
+              </div>
+            </motion.div>
+          </div>
         </div>
       </div>
 
@@ -489,6 +645,41 @@ export default function AdminHubPage() {
                 <div>
                   <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Description (Optional)</label>
                   <textarea rows={2} value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0 resize-none" placeholder="A brief overview of the module..." />
+                </div>
+
+                {/* Course Cover Image Uploader (with dynamic WebP conversion) */}
+                <div className="p-4 bg-surface-container/60 border border-outline-variant/10">
+                  <label className="text-white uppercase tracking-widest mb-2 block font-bold" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Course Cover Image</label>
+                  <div className="flex flex-col md:flex-row items-center gap-4">
+                    <div className="w-24 h-16 bg-surface-container border border-outline-variant/20 flex items-center justify-center overflow-hidden shrink-0">
+                      {formData.img ? (
+                        <img src={formData.img} alt="Preview" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="material-symbols-outlined text-on-surface-variant text-xl">image</span>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2 w-full">
+                      <input 
+                        type="text" 
+                        value={formData.img} 
+                        onChange={e => setFormData({ ...formData, img: e.target.value })} 
+                        className="w-full bg-transparent border-b border-outline-variant/30 focus:border-primary focus:outline-none text-white text-xs py-1" 
+                        placeholder="Paste Cover Image URL" 
+                      />
+                      <div className="flex items-center gap-3">
+                        <label className="bg-primary/20 text-primary border border-primary/30 px-3 py-1 cursor-pointer hover:bg-primary/30 transition-colors uppercase tracking-widest text-[9px] font-bold select-none">
+                          {uploadingField === "course-img" ? "Converting..." : "Upload File"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={e => handleFileUpload(e, "course-img")}
+                            className="hidden"
+                          />
+                        </label>
+                        <span className="text-on-surface-variant text-[9px] uppercase tracking-wider font-mono">Accepts JPG/PNG/GIF $\rightarrow$ Converts directly to WebP</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Video Sessions list */}
@@ -523,14 +714,31 @@ export default function AdminHubPage() {
                           </div>
                         </div>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-on-surface-variant uppercase tracking-widest mb-1 block" style={{ fontFamily: "Geist, monospace", fontSize: "9px" }}>Lesson Cover Image (Optional)</label>
-                            <input type="url" value={session.img} onChange={e => handleSessionChange(index, "img", e.target.value)} className="w-full bg-transparent border-b border-outline-variant/30 focus:border-primary focus:outline-none text-white text-xs py-1" placeholder="https://example.com/cover.jpg" />
-                          </div>
-                          <div>
-                            <label className="text-on-surface-variant uppercase tracking-widest mb-1 block" style={{ fontFamily: "Geist, monospace", fontSize: "9px" }}>Lesson Description</label>
-                            <input type="text" value={session.description} onChange={e => handleSessionChange(index, "description", e.target.value)} className="w-full bg-transparent border-b border-outline-variant/30 focus:border-primary focus:outline-none text-white text-xs py-1" placeholder="What will they learn?" />
+                        <div className="space-y-2">
+                          <label className="text-on-surface-variant uppercase tracking-widest mb-1 block" style={{ fontFamily: "Geist, monospace", fontSize: "9px" }}>Lesson Description</label>
+                          <input type="text" value={session.description} onChange={e => handleSessionChange(index, "description", e.target.value)} className="w-full bg-transparent border-b border-outline-variant/30 focus:border-primary focus:outline-none text-white text-xs py-1" placeholder="What will they learn?" />
+                        </div>
+
+                        {/* Session Cover Image Uploader (WebP uploader) */}
+                        <div className="p-3 bg-background/50 border border-outline-variant/5 mt-1 space-y-2">
+                          <label className="text-on-surface-variant uppercase tracking-widest block font-bold" style={{ fontFamily: "Geist, monospace", fontSize: "9px" }}>Lesson Cover Thumbnail</label>
+                          <div className="flex items-center gap-3">
+                            <input 
+                              type="text" 
+                              value={session.img} 
+                              onChange={e => handleSessionChange(index, "img", e.target.value)} 
+                              className="flex-1 bg-transparent border-b border-outline-variant/30 focus:border-primary focus:outline-none text-white text-[10px] py-1" 
+                              placeholder="Paste Lesson Cover Thumbnail URL" 
+                            />
+                            <label className="bg-primary/20 text-primary border border-primary/30 px-3 py-1 cursor-pointer hover:bg-primary/30 transition-colors uppercase tracking-widest text-[8px] font-bold select-none shrink-0">
+                              {uploadingField === `sess-${index}` ? "Converting..." : "Upload File"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={e => handleFileUpload(e, `sess-${index}`, index)}
+                                className="hidden"
+                              />
+                            </label>
                           </div>
                         </div>
                       </div>
@@ -541,6 +749,44 @@ export default function AdminHubPage() {
                 <div className="pt-4 flex gap-4 border-t border-outline-variant/20">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-3 border border-outline-variant uppercase tracking-widest hover:bg-white/5 transition-colors" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Cancel</button>
                   <button type="submit" className="flex-1 py-3 bg-primary text-background font-bold uppercase tracking-widest hover:brightness-110 transition-all" style={{ fontFamily: "Geist, monospace", fontSize: "11px" }}>Save Course</button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Admin Creator Modal */}
+      <AnimatePresence>
+        {isAdminModalOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm overflow-y-auto">
+            <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="glass-card w-full max-w-md p-8 border border-primary/20 relative my-8">
+              <button onClick={() => setIsAdminModalOpen(false)} className="absolute top-4 right-4 text-on-surface-variant hover:text-on-surface transition-colors">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+              <h2 className="text-white mb-6 uppercase tracking-widest" style={{ fontFamily: "Geist, monospace", fontSize: "14px" }}>
+                Add New Administrator Account
+              </h2>
+              
+              <form onSubmit={handleCreateAdmin} className="space-y-6">
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Administrator Name *</label>
+                  <input type="text" required value={adminForm.name} onChange={e => setAdminForm({ ...adminForm, name: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0" placeholder="e.g. Liam Sterling" />
+                </div>
+                
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Secure Email *</label>
+                  <input type="email" required value={adminForm.email} onChange={e => setAdminForm({ ...adminForm, email: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0" placeholder="e.g. liam@merkanto.com" />
+                </div>
+
+                <div>
+                  <label className="text-on-surface-variant uppercase tracking-widest mb-2 block" style={{ fontFamily: "Geist, monospace", fontSize: "10px" }}>Secure Password *</label>
+                  <input type="password" required value={adminForm.password} onChange={e => setAdminForm({ ...adminForm, password: e.target.value })} className="w-full bg-transparent border-b border-outline-variant/40 focus:border-primary focus:outline-none transition-colors text-white py-2 px-0" placeholder="e.g. securePass123" />
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button type="button" onClick={() => setIsAdminModalOpen(false)} className="flex-1 py-3 border border-outline-variant uppercase tracking-widest hover:bg-white/5 transition-colors text-xs" style={{ fontFamily: "Geist, monospace" }}>Cancel</button>
+                  <button type="submit" className="flex-1 py-3 bg-primary text-background font-bold uppercase tracking-widest hover:brightness-110 transition-all text-xs" style={{ fontFamily: "Geist, monospace" }}>Publish Admin</button>
                 </div>
               </form>
             </motion.div>

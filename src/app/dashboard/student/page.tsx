@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import DashboardSidebar from "@/components/layout/DashboardSidebar";
 import { useCourses, Course, Session } from "@/hooks/useCourses";
@@ -33,6 +33,63 @@ export default function StudentDashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [reminderSet, setReminderSet] = useState(false);
 
+  // Split Workspace Interactive States
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [notesText, setNotesText] = useState("");
+  const [notebookTab, setNotebookTab] = useState<"notes" | "qa">("notes");
+  const [qaList, setQaList] = useState<{ id: string; studentName: string; text: string; upvotes: number; replies: string[] }[]>([]);
+  const [newQuestionText, setNewQuestionText] = useState("");
+
+  useEffect(() => {
+    if (activeSession) {
+      const savedNotes = localStorage.getItem(`merkanto_notes_${activeSession.id}`) || "";
+      setNotesText(savedNotes);
+      
+      const savedQa = localStorage.getItem(`merkanto_qa_${activeSession.id}`);
+      if (savedQa) {
+        setQaList(JSON.parse(savedQa));
+      } else {
+        const dummyQa = [
+          { id: "q1", studentName: "Aisha Vance", text: "How long does customs clearance typically take for dry freight on this route?", upvotes: 4, replies: ["Usually 2-3 business days if all cargo manifests match perfectly."] },
+          { id: "q2", studentName: "James Sterling", text: "Are letters of credit absolutely required for first-time suppliers?", upvotes: 2, replies: [] }
+        ];
+        setQaList(dummyQa);
+        localStorage.setItem(`merkanto_qa_${activeSession.id}`, JSON.stringify(dummyQa));
+      }
+    }
+  }, [activeSession]);
+
+  const handleSaveNotes = (text: string) => {
+    setNotesText(text);
+    if (activeSession) {
+      localStorage.setItem(`merkanto_notes_${activeSession.id}`, text);
+    }
+  };
+
+  const handlePostQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newQuestionText.trim() || !activeSession) return;
+    const newQ = {
+      id: Math.random().toString(36).substring(2, 9),
+      studentName: currentStudent.name,
+      text: newQuestionText,
+      upvotes: 0,
+      replies: []
+    };
+    const updated = [newQ, ...qaList];
+    setQaList(updated);
+    localStorage.setItem(`merkanto_qa_${activeSession.id}`, JSON.stringify(updated));
+    setNewQuestionText("");
+    showToast("Question posted to classroom feed.");
+  };
+
+  const handleUpvote = (qId: string) => {
+    if (!activeSession) return;
+    const updated = qaList.map(q => q.id === qId ? { ...q, upvotes: q.upvotes + 1 } : q);
+    setQaList(updated);
+    localStorage.setItem(`merkanto_qa_${activeSession.id}`, JSON.stringify(updated));
+  };
+
   // Submit assignment modal state
   const [submittingAssignmentId, setSubmittingAssignmentId] = useState<string | null>(null);
   const [submissionText, setSubmissionText] = useState("");
@@ -53,11 +110,12 @@ export default function StudentDashboardPage() {
     watchedVideos: [] as string[]
   };
 
-  const playVideo = (youtubeUrl: string) => {
-    const embedUrl = getEmbedUrl(youtubeUrl);
+  const playVideo = (session: Session) => {
+    const embedUrl = getEmbedUrl(session.youtubeUrl);
     setPlayingUrl(embedUrl);
+    setActiveSession(session);
     if (currentStudent.id) {
-      markVideoWatched(currentStudent.id, youtubeUrl);
+      markVideoWatched(currentStudent.id, session.youtubeUrl);
       showToast("Lesson started. Progress recorded.");
     }
   };
@@ -231,7 +289,7 @@ export default function StudentDashboardPage() {
                     </div>
                     {lastWatchedSession && (
                       <button
-                        onClick={() => playVideo(lastWatchedSession!.youtubeUrl)}
+                        onClick={() => playVideo(lastWatchedSession)}
                         className="bg-primary text-background font-bold text-xs uppercase tracking-widest py-2.5 px-6 hover:brightness-110 transition-all flex items-center justify-center gap-1 w-full"
                         style={{ fontFamily: "Geist, monospace" }}
                       >
@@ -501,7 +559,7 @@ export default function StudentDashboardPage() {
                             {session.description && <p className="text-on-surface-variant text-xs mt-1">{session.description}</p>}
                           </div>
                           <button 
-                            onClick={() => playVideo(session.youtubeUrl)} 
+                            onClick={() => playVideo(session)} 
                             className={`px-4 py-2 uppercase tracking-widest shrink-0 font-bold transition-all text-xs flex items-center gap-1 ${watched ? "bg-surface-container-highest text-on-surface-variant hover:text-white" : "bg-primary text-background hover:brightness-110"}`}
                             style={{ fontFamily: "Geist, monospace" }}
                           >
@@ -562,15 +620,137 @@ export default function StudentDashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Video Modal */}
+      {/* Video Modal with Interactive Split Workspace */}
       <AnimatePresence>
-        {playingUrl && (
+        {playingUrl && activeSession && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-background/95 backdrop-blur-md">
-            <div className="relative w-full max-w-5xl aspect-video glass-card border border-primary/20 overflow-hidden">
-              <button onClick={() => setPlayingUrl(null)} className="absolute top-4 right-4 z-10 w-10 h-10 bg-background/50 backdrop-blur-md border border-white/10 rounded-full flex items-center justify-center text-white hover:text-primary transition-colors">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-              <iframe src={`${playingUrl}?autoplay=1`} className="w-full h-full" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+            <div className="relative w-full max-w-6xl h-[85vh] bg-surface-container border border-primary/20 flex flex-col md:flex-row overflow-hidden shadow-2xl">
+              
+              {/* Left Side: Video Player */}
+              <div className="flex-1 bg-black relative flex flex-col">
+                <div className="flex items-center justify-between px-6 py-3 border-b border-outline-variant/10 bg-surface-container-lowest">
+                  <div>
+                    <span className="text-[10px] text-primary uppercase font-bold tracking-widest" style={{ fontFamily: "Geist, monospace" }}>Active Session</span>
+                    <h3 className="text-white text-sm uppercase tracking-wider font-bold" style={{ fontFamily: "Hanken Grotesk, sans-serif" }}>{activeSession.title}</h3>
+                  </div>
+                  <button 
+                    onClick={() => { setPlayingUrl(null); setActiveSession(null); }} 
+                    className="w-8 h-8 bg-surface-container border border-white/5 rounded-full flex items-center justify-center text-white hover:text-primary transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+                <div className="flex-1 relative">
+                  <iframe src={`${playingUrl}?autoplay=1`} className="w-full h-full absolute inset-0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+                </div>
+              </div>
+
+              {/* Right Side: Tabbed Workspace (Notebook / QA Forum) */}
+              <div className="w-full md:w-96 border-t md:border-t-0 md:border-l border-outline-variant/10 flex flex-col h-full bg-surface-container-low">
+                {/* Tab Switcher */}
+                <div className="flex border-b border-outline-variant/10 bg-surface-container-lowest">
+                  <button 
+                    onClick={() => setNotebookTab("notes")} 
+                    className={`flex-1 py-4 text-center uppercase tracking-widest font-bold text-[11px] transition-all flex items-center justify-center gap-1.5 ${notebookTab === "notes" ? "text-primary bg-primary/5 border-b-2 border-primary" : "text-on-surface-variant hover:text-on-surface"}`}
+                    style={{ fontFamily: "Geist, monospace" }}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit_note</span>
+                    My Notes
+                  </button>
+                  <button 
+                    onClick={() => setNotebookTab("qa")} 
+                    className={`flex-1 py-4 text-center uppercase tracking-widest font-bold text-[11px] transition-all flex items-center justify-center gap-1.5 ${notebookTab === "qa" ? "text-primary bg-primary/5 border-b-2 border-primary" : "text-on-surface-variant hover:text-on-surface"}`}
+                    style={{ fontFamily: "Geist, monospace" }}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">forum</span>
+                    Classroom Q&A
+                  </button>
+                </div>
+
+                {/* Tab Contents */}
+                <div className="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-4">
+                  {notebookTab === "notes" ? (
+                    <div className="flex flex-col h-full space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-on-surface-variant uppercase tracking-widest" style={{ fontFamily: "Geist, monospace" }}>Personal Notepad</span>
+                        <button 
+                          onClick={() => {
+                            const timeStr = `[Time ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] - `;
+                            handleSaveNotes(notesText + timeStr);
+                          }}
+                          className="text-[9px] bg-primary/10 text-primary border border-primary/20 px-2 py-1 uppercase tracking-widest hover:bg-primary/20 transition-all font-bold"
+                          style={{ fontFamily: "Geist, monospace" }}
+                        >
+                          + Insert Timestamp
+                        </button>
+                      </div>
+                      <textarea
+                        value={notesText}
+                        onChange={e => handleSaveNotes(e.target.value)}
+                        className="flex-1 w-full min-h-[300px] bg-transparent border border-outline-variant/20 focus:border-primary/40 focus:outline-none text-xs text-white p-3 resize-none line-height-relaxed"
+                        placeholder="Write down key takeaways, logistics routes, or pricing structures... Notes are automatically saved client-side for this video session!"
+                        style={{ fontFamily: "Inter, sans-serif" }}
+                      />
+                      <div className="text-[10px] text-primary/70 flex items-center gap-1" style={{ fontFamily: "Geist, monospace" }}>
+                        <span className="material-symbols-outlined text-[12px]">cloud_done</span>
+                        Auto-saved locally
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col h-full space-y-4">
+                      {/* Q&A Post Form */}
+                      <form onSubmit={handlePostQuestion} className="space-y-2">
+                        <textarea
+                          value={newQuestionText}
+                          onChange={e => setNewQuestionText(e.target.value)}
+                          className="w-full bg-transparent border border-outline-variant/20 focus:border-primary/40 focus:outline-none text-xs text-white p-2.5 resize-none h-16"
+                          placeholder="Ask a question about this lecture..."
+                          style={{ fontFamily: "Inter, sans-serif" }}
+                        />
+                        <button 
+                          type="submit" 
+                          className="w-full py-2 bg-primary text-background uppercase tracking-widest font-bold text-[10px] hover:brightness-110 transition-all flex items-center justify-center gap-1"
+                          style={{ fontFamily: "Geist, monospace" }}
+                        >
+                          <span className="material-symbols-outlined text-[14px]">send</span>
+                          Submit Question
+                        </button>
+                      </form>
+
+                      {/* Q&A Feed */}
+                      <div className="space-y-3 flex-1 overflow-y-auto max-h-[350px] pr-1 custom-scrollbar">
+                        {qaList.map((q) => (
+                          <div key={q.id} className="p-3 bg-surface-container border border-outline-variant/10 rounded-md space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-primary font-bold" style={{ fontFamily: "Geist, monospace" }}>{q.studentName}</span>
+                              <button 
+                                type="button"
+                                onClick={() => handleUpvote(q.id)}
+                                className="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-primary transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[12px]">thumb_up</span>
+                                {q.upvotes}
+                              </button>
+                            </div>
+                            <p className="text-xs text-white leading-relaxed" style={{ fontFamily: "Inter, sans-serif" }}>{q.text}</p>
+                            
+                            {/* Replies */}
+                            {q.replies && q.replies.length > 0 && (
+                              <div className="pl-3 border-l-2 border-primary/30 mt-2 space-y-1 bg-white/2">
+                                <div className="text-[9px] text-primary uppercase font-bold" style={{ fontFamily: "Geist, monospace" }}>Instructor Answer:</div>
+                                {q.replies.map((rep, idx) => (
+                                  <p key={idx} className="text-[11px] text-on-surface-variant italic" style={{ fontFamily: "Inter, sans-serif" }}>"{rep}"</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
           </motion.div>
         )}
